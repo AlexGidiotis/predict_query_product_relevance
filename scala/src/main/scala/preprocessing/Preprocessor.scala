@@ -22,14 +22,14 @@ class Preprocessor {
   def preprocess(df: DataFrame, inputCols: Array[String]) : DataFrame = {
     var dataFrame = df
     inputCols.foreach(inputCol => {
-      val outputColNoDigits = inputCol + "NoDigits"
-      val outputColTokenized = inputCol + "Tokenized"
-      val outputColNoPunctuation = inputCol + "NoPunctuation"
-      val outputColNoStopWrods = inputCol + "NoStopWords"
+      val outputColNoDigits = inputCol + "_NoDigits"
+      val outputColTokenized = inputCol + "_Tokenized"
+      val outputColNoPunctuation = inputCol + "_NoPunctuation"
+      val outputColNoStopWrods = inputCol + "_NoStopWords"
       dataFrame = removeStopWords(outputColTokenized, outputColNoStopWrods,
         tokenize(outputColNoPunctuation, outputColTokenized,
           noPunctuation(outputColNoDigits, outputColNoPunctuation,
-            replaceDigits(inputCol, outputColNoDigits, df))))
+            replaceDigits(inputCol, outputColNoDigits, dataFrame))))
     })
     return dataFrame
   }
