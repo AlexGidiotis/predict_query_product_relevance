@@ -2,6 +2,8 @@ from pyspark.sql import SparkSession
 from pyspark.ml.feature import Tokenizer, StopWordsRemover, HashingTF, IDF, VectorAssembler	
 from pyspark.sql.functions import udf, col, size, lit
 from pyspark.sql.types import *
+from pyspark.ml.regression import RandomForestRegressor, LinearRegression
+from pyspark.ml.evaluation import RegressionEvaluator
 
 
 import re
@@ -81,8 +83,8 @@ df = sterm_idfModel.transform(df)
 
 df.select('new_relevance','title_features','sterm_features').show()
 assembler = VectorAssembler(
-    inputCols=['title_features','sterm_features'],
-    outputCol='features')
+	inputCols=['title_features','sterm_features'],
+	outputCol='features')
 
 df = assembler.transform(df)
 df.select('title_features','sterm_features','features','new_relevance').show()
@@ -91,9 +93,37 @@ train_df, test_df = df.randomSplit([0.8, 0.2], seed=45)
 train_size = train_df.count()
 test_size =  test_df.count()
 
-train_df.select('title_features','sterm_features','features','new_relevance').write.json(path="input/train_set", mode='overwrite')
-test_df.select('title_features','sterm_features','features','new_relevance').write.json(path="input/test_set", mode='overwrite')
+print train_size,test_size
+#train_df.select('title_features','sterm_features','features','new_relevance').write.json(path="input/train_set", mode='overwrite')
+#test_df.select('title_features','sterm_features','features','new_relevance').write.json(path="input/test_set", mode='overwrite')
 
+lr = LinearRegression(labelCol='new_relevance',
+	maxIter=100,
+	regParam=0.2,
+	elasticNetParam=0.1)
 
+# Fit the model
+model = lr.fit(train_df)
+
+# Print the coefficients and intercept for linear regression
+#print("Coefficients: %s" % str(model.coefficients))
+#print("Intercept: %s" % str(model.intercept))
+
+# Summarize the model over the training set and print out some metrics
+trainingSummary = model.summary
+print("numIterations: %d" % trainingSummary.totalIterations)
+print("objectiveHistory: %s" % str(trainingSummary.objectiveHistory))
+trainingSummary.residuals.show()
+print("RMSE: %f" % trainingSummary.rootMeanSquaredError)
+print("r2: %f" % trainingSummary.r2)
+
+evaluator = RegressionEvaluator(labelCol='new_relevance',
+	predictionCol='prediction',
+	metricName='rmse')
+
+predictions = model.transform(test_df)
+predictions.select('prediction','new_relevance').show()
+rmse = evaluator.evaluate(predictions)
+print('Root Mean Squared Error (RMSE) on test data = %g' % rmse)
 
 spark.stop()
