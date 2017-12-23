@@ -1,7 +1,8 @@
 from pyspark.sql import SparkSession
-from pyspark.ml.feature import Tokenizer, StopWordsRemover, HashingTF, IDF
+from pyspark.ml.feature import Tokenizer, StopWordsRemover, HashingTF, IDF, VectorAssembler	
 from pyspark.sql.functions import udf, col, size, lit
 from pyspark.sql.types import *
+
 
 import re
 
@@ -31,6 +32,8 @@ spark = SparkSession.builder.getOrCreate()
 
 df = spark.read.csv(data_path,
 	header=True)
+
+df = df.withColumn('new_relevance',df['relevance'].cast(FloatType()))
 
 replaceDigitsUdf = udf(replaceDigits, StringType())
 df = df.withColumn('nodigits_title', replaceDigitsUdf('product_title'))
@@ -76,5 +79,21 @@ sterm_idfModel = sterm_idf.fit(df)
 df = title_idfModel.transform(df)
 df = sterm_idfModel.transform(df)
 
-df.show()
-print df.take(1)
+df.select('new_relevance','title_features','sterm_features').show()
+assembler = VectorAssembler(
+    inputCols=['title_features','sterm_features'],
+    outputCol='features')
+
+df = assembler.transform(df)
+df.select('title_features','sterm_features','features','new_relevance').show()
+
+train_df, test_df = df.randomSplit([0.8, 0.2], seed=45)
+train_size = train_df.count()
+test_size =  test_df.count()
+
+train_df.select('title_features','sterm_features','features','new_relevance').write.json(path="input/train_set", mode='overwrite')
+test_df.select('title_features','sterm_features','features','new_relevance').write.json(path="input/test_set", mode='overwrite')
+
+
+
+spark.stop()
