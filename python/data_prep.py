@@ -26,7 +26,7 @@ def removePunctuation(text):
 
 
 
-data_path = 'data/train.csv'
+data_path = '../input/train.csv'
 spark = SparkSession.builder.getOrCreate()
 
 df = spark.read.csv(data_path,
@@ -40,26 +40,41 @@ removePunctuationUdf = udf(removePunctuation, StringType())
 df = df.withColumn('processed_title', removePunctuationUdf('nodigits_title'))
 df = df.withColumn('processed_sterm', removePunctuationUdf('nodigits_sterm'))
 
-tokenizer = Tokenizer(inputCol="processed_description",
-	outputCol="tokens")
-df = tokenizer.transform(df)
-df = tokenizer.transform(df)
-df.show()
+title_tokenizer = Tokenizer(inputCol="processed_title",
+	outputCol="title_tokens")
+sterm_tokenizer = Tokenizer(inputCol="processed_sterm",
+	outputCol="sterm_tokens")
 
-remover = StopWordsRemover(inputCol="tokens",
-	outputCol="filtered_tokens")
-df = remover.transform(df)
+df = title_tokenizer.transform(df)
+df = sterm_tokenizer.transform(df)
 
-hashingTF = HashingTF(inputCol="filtered_tokens",
-	outputCol="rawFeatures",
+title_remover = StopWordsRemover(inputCol="title_tokens",
+	outputCol="filtered_title_tokens")
+sterm_remover = StopWordsRemover(inputCol="sterm_tokens",
+	outputCol="filtered_sterm_tokens")
+df = title_remover.transform(df)
+df = sterm_remover.transform(df)
+
+title_hashingTF = HashingTF(inputCol="filtered_title_tokens",
+	outputCol="title_rawFeatures",
 	numFeatures=32768)
-df = hashingTF.transform(df)
+sterm_hashingTF = HashingTF(inputCol="filtered_sterm_tokens",
+	outputCol="sterm_rawFeatures",
+	numFeatures=32768)
 
-idf = IDF(inputCol="rawFeatures",
-	outputCol="features")
+df = title_hashingTF.transform(df)
+df = sterm_hashingTF.transform(df)
 
-idfModel = idf.fit(df)
-df = idfModel.transform(df)
+title_idf = IDF(inputCol="title_rawFeatures",
+	outputCol="title_features")
+sterm_idf = IDF(inputCol="sterm_rawFeatures",
+	outputCol="sterm_features")
+
+title_idfModel = title_idf.fit(df)
+sterm_idfModel = sterm_idf.fit(df)
+
+df = title_idfModel.transform(df)
+df = sterm_idfModel.transform(df)
 
 df.show()
 print df.take(1)
