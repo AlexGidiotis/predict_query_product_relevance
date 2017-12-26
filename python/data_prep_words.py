@@ -116,8 +116,8 @@ test_size =  test_df.count()
 
 print train_size,test_size
 
-train_df.select('int_title_tokens','int_sterm_tokens').write.json(path="data/train_set", mode='overwrite')
-test_df.select('int_title_tokens','int_sterm_tokens').write.json(path="data/test_set", mode='overwrite')
+train_df.select('int_title_tokens','int_sterm_tokens','product_uid').write.json(path="data/train_set", mode='overwrite')
+test_df.select('int_title_tokens','int_sterm_tokens','product_uid').write.json(path="data/test_set", mode='overwrite')
 train_df.select('relevance').write.json(path="data/train_set_labels", mode='overwrite')
 test_df.select('relevance').write.json(path="data/test_set_labels", mode='overwrite')
 

@@ -3,7 +3,11 @@ from pyspark.ml.feature import Tokenizer, StopWordsRemover, HashingTF, IDF, Vect
 from pyspark.sql.functions import udf, col, size, lit
 from pyspark.sql.types import *
 from pyspark.ml.regression import RandomForestRegressor, LinearRegression
-from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.ml.evaluation import RegressionEvaluator, MulticlassClassificationEvaluator
+from pyspark.ml.classification import LogisticRegression, RandomForestClassifier, NaiveBayes
+from pyspark.mllib.classification import SVMWithSGD, LabeledPoint
+from pyspark.sql.types import Row
+from pyspark.ml.linalg import DenseVector
 
 
 import re
@@ -27,6 +31,11 @@ def removePunctuation(text):
 	return re.sub('[^a-zA-Z# ]','',text)
 
 
+def createClassLabel(relevance):
+
+	return int(relevance)
+
+
 
 
 data_path = '../input/train.csv'
@@ -38,6 +47,11 @@ df = spark.read.csv(data_path,
 df = df.withColumn('new_relevance',df['relevance'].cast(FloatType()))
 
 replaceDigitsUdf = udf(replaceDigits, StringType())
+
+createClassLabelUdf = udf(createClassLabel, IntegerType())
+
+df = df.withColumn('label',createClassLabelUdf('new_relevance'))
+
 df = df.withColumn('nodigits_title', replaceDigitsUdf('product_title'))
 df = df.withColumn('nodigits_sterm', replaceDigitsUdf('search_term'))
 
@@ -81,22 +95,55 @@ sterm_idfModel = sterm_idf.fit(df)
 df = title_idfModel.transform(df)
 df = sterm_idfModel.transform(df)
 
-df.select('new_relevance','title_features','sterm_features').show()
+df.select('label','title_features','sterm_features').show()
 assembler = VectorAssembler(
 	inputCols=['title_features','sterm_features'],
 	outputCol='features')
 
 df = assembler.transform(df)
-df.select('title_features','sterm_features','features','new_relevance').show()
+df.select('title_features','sterm_features','features','label').show()
 
 train_df, test_df = df.randomSplit([0.8, 0.2], seed=45)
 train_size = train_df.count()
 test_size =  test_df.count()
 
 print train_size,test_size
-#train_df.select('title_features','sterm_features','features','new_relevance').write.json(path="input/train_set", mode='overwrite')
-#test_df.select('title_features','sterm_features','features','new_relevance').write.json(path="input/test_set", mode='overwrite')
 
+
+#========================================== Classification =====================================================
+# Naive Bayess
+
+nb = NaiveBayes(labelCol='label',
+	smoothing=1.0,
+	modelType="multinomial")
+
+model = nb.fit(train_df)
+
+
+
+
+predictions = model.transform(test_df)
+
+# Select example rows to display.
+predictions.select("prediction", "label", "new_relevance").show()
+
+# Select (prediction, true label) and compute test error
+evaluator = MulticlassClassificationEvaluator(labelCol="label",
+    predictionCol="prediction",
+    metricName="f1")
+
+accuracy = evaluator.evaluate(predictions)
+print("Test Error = %g " % (1.0 - accuracy))
+
+evaluator_2 = RegressionEvaluator(labelCol='label',
+	predictionCol='prediction',
+	metricName='rmse')
+
+rmse = evaluator_2.evaluate(predictions)
+print('Root Mean Squared Error (RMSE) on test data = %g' % rmse)
+
+'''
+#============================================= Regression =======================================================
 lr = LinearRegression(labelCol='new_relevance',
 	maxIter=100,
 	regParam=0.2,
@@ -125,5 +172,5 @@ predictions = model.transform(test_df)
 predictions.select('prediction','new_relevance').show()
 rmse = evaluator.evaluate(predictions)
 print('Root Mean Squared Error (RMSE) on test data = %g' % rmse)
-
+'''
 spark.stop()
