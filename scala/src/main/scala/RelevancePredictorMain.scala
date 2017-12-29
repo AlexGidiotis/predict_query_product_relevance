@@ -4,7 +4,8 @@ import org.apache.spark.ml.feature.VectorAssembler
 import org.apache.spark.sql.SparkSession
 import preprocessing.{FeatureExtractor, Preprocessor}
 import org.apache.spark.ml.regression.LinearRegression
-import org.apache.spark.sql.types.IntegerType
+import org.apache.spark.ml.evaluation.RegressionEvaluator
+import org.apache.spark.sql.functions.{concat, lit, concat_ws, collect_list}
 
 object RelevancePredictorMain {
 
@@ -24,10 +25,10 @@ object RelevancePredictorMain {
     val conf = new SparkConf().setAppName("Relevance Predictor App").setMaster("local[4]").set("spark.executor.memory", "1g")
     val spark = SparkSession.builder().config(conf).getOrCreate()
 
-    // Initializing preprocessor
+    // Initializing preprocessor for removing stopwords, punctuations etc.
     val preprocessor = new Preprocessor()
 
-    // Initializing featureExtractor
+    // Initializing featureExtractor for tf-idf
     val featureExtractor = new FeatureExtractor()
 
     // Reading files to DataFrames
@@ -36,26 +37,59 @@ object RelevancePredictorMain {
     val trainDF = spark.read.option("header", "true").option("delimiter", ",").csv(trainPath)
     val testDF = spark.read.option("header", "true").option("delimiter", ",").csv(testPath)
 
-    val preprocessedDF = preprocessor.preprocess(trainDF, Array("product_title", "search_term"))
-    val extractedFeaturesDF = featureExtractor.extractFeature(preprocessedDF, Array("product_title", "search_term"))
+    // Preparing a joined dataframe to work on
+    import spark.implicits._
 
-    val selectedDF = extractedFeaturesDF.select("relevance", "product_title_NoStopWords_TF_IDF", "search_term_NoStopWords_TF_IDF")
+    val attributesGrouppedAndAggregatedDF  = attributesDF
+      .withColumn("attributes", concat($"name", lit(" "), $"value"))
+      .select("product_uid","attributes")
+      .groupBy("product_uid")
+      .agg(concat_ws(" ", collect_list("attributes")).as("attributes"))
 
+    val workingDF = trainDF
+      .join(productDescriptionsDF, "product_uid")
+      .join(attributesGrouppedAndAggregatedDF, "product_uid")
+
+    // preprocessing
+    val preprocessedTrainDF = preprocessor
+      .preprocess(workingDF, Array("product_title", "search_term", "product_description", "attributes"))
+
+    // extracting features with TF-IDF
+    val extractedFeaturesTrainDF = featureExtractor
+      .extractFeature(preprocessedTrainDF, Array( "product_title",
+                                                  "search_term",
+                                                  "product_description",
+                                                  "attributes"))
+
+    // keeping only specific columns
+    val selectedTrainDF = extractedFeaturesTrainDF
+      .select("relevance",
+        "product_title_NoStopWords_TF_IDF",
+        "search_term_NoStopWords_TF_IDF",
+        "product_description_NoStopWords_TF_IDF",
+        "attributes_NoStopWords_TF_IDF")
+
+    // assembling collumns to one feature column
     val featuresDF = new VectorAssembler()
-      .setInputCols(Array("product_title_NoStopWords_TF_IDF", "search_term_NoStopWords_TF_IDF"))
+      .setInputCols(Array("product_title_NoStopWords_TF_IDF",
+        "search_term_NoStopWords_TF_IDF",
+        "product_description_NoStopWords_TF_IDF",
+        "attributes_NoStopWords_TF_IDF"))
       .setOutputCol("features")
-      .transform(selectedDF)
+      .transform(selectedTrainDF)
       .selectExpr("cast(relevance as float) relevance", "features")
 
+    // preparing linear regression
     val lr = new LinearRegression()
       .setMaxIter(10)
-      .setRegParam(0.3)
-      .setElasticNetParam(0.8)
+      .setRegParam(0.2)
+      .setElasticNetParam(0.05)
       .setLabelCol("relevance")
       .setFeaturesCol("features")
 
     // Fit the model
-    val lrModel = lr.fit(featuresDF)
+    val Array(featuresTrainDF, featuresTestDF) = featuresDF.randomSplit(Array(0.8, 0.2), 45)
+    val lrModel = lr.fit(featuresTrainDF)
 
     // Print the coefficients and intercept for linear regression
     println(s"Coefficients: ${lrModel.coefficients} Intercept: ${lrModel.intercept}")
@@ -67,6 +101,17 @@ object RelevancePredictorMain {
     trainingSummary.residuals.show()
     println(s"RMSE: ${trainingSummary.rootMeanSquaredError}")
     println(s"r2: ${trainingSummary.r2}")
+
+    val predictions = lrModel.transform(featuresTestDF)
+    predictions.select("prediction", "relevance").show(50, false)
+
+    val evaluator = new RegressionEvaluator()
+      .setLabelCol("relevance")
+      .setPredictionCol("prediction")
+      .setMetricName("rmse")
+
+    val rmse = evaluator.evaluate(predictions)
+    println("Root Mean Squared Error (RMSE) on test data = " + rmse)
 
   }
 

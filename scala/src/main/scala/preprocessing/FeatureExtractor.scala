@@ -5,7 +5,7 @@ import org.apache.spark.sql.DataFrame
 
 class FeatureExtractor {
 
-  val vocabularySize = 32768
+  val vocabularySize = 16384
 
   def extractFeature(df: DataFrame, inputCol: String) : DataFrame = {
     val inputColumn = inputCol + "_NoStopWords"
