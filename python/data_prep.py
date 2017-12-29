@@ -2,7 +2,7 @@ from pyspark.sql import SparkSession
 from pyspark.ml.feature import Tokenizer, StopWordsRemover, HashingTF, IDF, VectorAssembler	
 from pyspark.sql.functions import udf, col, size, lit, concat, concat_ws, collect_list
 from pyspark.sql.types import *
-from pyspark.ml.regression import RandomForestRegressor, LinearRegression
+from pyspark.ml.regression import RandomForestRegressor, LinearRegression, GeneralizedLinearRegression, DecisionTreeRegressor
 from pyspark.ml.evaluation import RegressionEvaluator, MulticlassClassificationEvaluator
 from pyspark.ml.classification import LogisticRegression, RandomForestClassifier, NaiveBayes
 from pyspark.mllib.classification import SVMWithSGD, LabeledPoint
@@ -12,6 +12,9 @@ from pyspark.ml.linalg import DenseVector
 from itertools import chain
 import re
 
+from nltk.stem.porter import PorterStemmer
+
+ps = PorterStemmer()
 
 def replaceDigits(text):
 	"""
@@ -36,6 +39,8 @@ def createClassLabel(relevance):
 	return int(relevance)
 
 
+def stemming(tokens):
+	return [ps.stem(token) for token in tokens]
 
 
 data_path = '../input/train.csv'
@@ -56,7 +61,7 @@ attr_df = spark.read.csv(attributes_path,
 #df = df.join(descr_df, ['product_uid'])
 #attr_df = attr_df.groupBy('product_uid').agg(f.concat_ws(" ", f.collect_list(attr_df.name))).show()
 
-attr_df = attr_df.select('product_uid','name').groupBy('product_uid').agg(concat_ws(' ',collect_list('name')).alias('attribute_names'))
+attr_df = attr_df.select('product_uid','value').groupBy('product_uid').agg(concat_ws(' ',collect_list('value')).alias('attribute_names'))
 
 df = df.join(attr_df, ['product_uid'])
 
@@ -118,7 +123,10 @@ concat_string_arrays = concat(StringType())
 
 df = df.withColumn('joined_tokens',concat_string_arrays(col('filtered_title_tokens'),col('filtered_sterm_tokens'),col('filtered_attr_tokens')))
 
-joined_hashingTF = HashingTF(inputCol="joined_tokens",
+stemmingUdf = udf(stemming, ArrayType(StringType()))
+df = df.withColumn('stemmed_tokens', stemmingUdf('joined_tokens'))
+
+joined_hashingTF = HashingTF(inputCol="stemmed_tokens",
 	outputCol="joined_rawFeatures",
 	numFeatures=16384)
 
@@ -138,6 +146,7 @@ assembler = VectorAssembler(
 
 df = assembler.transform(df)
 '''
+
 df.select('features','label').show()
 
 train_df, test_df = df.randomSplit([0.8, 0.2], seed=45)
@@ -181,13 +190,16 @@ print('Root Mean Squared Error (RMSE) on test data = %g' % rmse)
 
 '''
 #============================================= Regression =======================================================
+
+dt = DecisionTreeRegressor(labelCol='new_relevance')
+
 lr = LinearRegression(labelCol='new_relevance',
-	maxIter=15,
-	regParam=0.2,
-	elasticNetParam=0.0)
+	maxIter=25,
+	regParam=0.5)
 
 # Fit the model
 model = lr.fit(train_df)
+
 
 # Print the coefficients and intercept for linear regression
 #print("Coefficients: %s" % str(model.coefficients))
@@ -200,6 +212,7 @@ print("objectiveHistory: %s" % str(trainingSummary.objectiveHistory))
 trainingSummary.residuals.show()
 print("RMSE: %f" % trainingSummary.rootMeanSquaredError)
 print("r2: %f" % trainingSummary.r2)
+
 
 evaluator = RegressionEvaluator(labelCol='new_relevance',
 	predictionCol='prediction',
