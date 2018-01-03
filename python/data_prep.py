@@ -17,29 +17,41 @@ from nltk.stem.porter import PorterStemmer
 ps = PorterStemmer()
 
 def replaceDigits(text):
-	"""
-	Takes a string of text and preprocesses it. The preprocessing includes integer replacement with '#', remove LaTex
-	math and macros, tokenizing, stopword removal and encoding to ascii.
 
-	Argument:
-		text: A string.
-	Returns:
-		filtered_tokens: A list of the tokens.
-	"""
 	return re.sub('\d+','#',text)
 
 def removePunctuation(text):
-	"""
-	"""
+
 	return re.sub('[^a-zA-Z# ]','',text)
 
 
 def createClassLabel(relevance):
 
-	return int(relevance)
+	if relevance < 1.25:
+		return 1
+	elif relevance < 1.75:
+		return 2
+	elif relevance < 2.25:
+		return 3
+	elif relevance < 2.75:
+		return 4
+	else:
+		return 5
 
+def label2Value(label):
+	if label == 1:
+		return 1.
+	elif label == 2:
+		return 1.5
+	elif label == 3:
+		return 2.
+	elif label == 4:
+		return 2.5
+	else:
+		return 3.
 
 def stemming(tokens):
+	
 	return [ps.stem(token) for token in tokens]
 
 
@@ -122,13 +134,13 @@ def concat(type):
 concat_string_arrays = concat(StringType())
 
 df = df.withColumn('joined_tokens',concat_string_arrays(col('filtered_title_tokens'),col('filtered_sterm_tokens'),col('filtered_attr_tokens')))
-
+'''
 stemmingUdf = udf(stemming, ArrayType(StringType()))
 df = df.withColumn('stemmed_tokens', stemmingUdf('joined_tokens'))
-
-joined_hashingTF = HashingTF(inputCol="stemmed_tokens",
+'''
+joined_hashingTF = HashingTF(inputCol="joined_tokens",
 	outputCol="joined_rawFeatures",
-	numFeatures=16384)
+	numFeatures=30000)
 
 df = joined_hashingTF.transform(df)
 
@@ -155,35 +167,32 @@ test_size =  test_df.count()
 
 print train_size,test_size
 
-'''
 #========================================== Classification =====================================================
-# Naive Bayess
+'''
+lr = LogisticRegression(labelCol='label',
+	maxIter=25,
+	regParam=0.3,
+	family="multinomial")
 
-nb = NaiveBayes(labelCol='label',
-	smoothing=1.0,
-	modelType="multinomial")
+model = lr.fit(train_df)
 
-model = nb.fit(train_df)
-
-
-
-
+train_predictions = model.transform(train_df)
 predictions = model.transform(test_df)
 
+label2ValueUdf = udf(label2Value, FloatType())
+
+train_predictions = train_predictions.withColumn('predicted_value',label2ValueUdf('prediction'))
+predictions = predictions.withColumn('predicted_value',label2ValueUdf('prediction'))
+
 # Select example rows to display.
-predictions.select("prediction", "label", "new_relevance").show()
+predictions.select("predicted_value", "new_relevance").show()
 
-# Select (prediction, true label) and compute test error
-evaluator = MulticlassClassificationEvaluator(labelCol="label",
-    predictionCol="prediction",
-    metricName="f1")
-
-accuracy = evaluator.evaluate(predictions)
-print("Test Error = %g " % (1.0 - accuracy))
-
-evaluator_2 = RegressionEvaluator(labelCol='label',
-	predictionCol='prediction',
+evaluator_2 = RegressionEvaluator(labelCol='new_relevance',
+	predictionCol='predicted_value',
 	metricName='rmse')
+
+train_rmse = evaluator_2.evaluate(train_predictions)
+print('Root Mean Squared Error (RMSE) on training data = %g' % train_rmse)
 
 rmse = evaluator_2.evaluate(predictions)
 print('Root Mean Squared Error (RMSE) on test data = %g' % rmse)
@@ -191,10 +200,8 @@ print('Root Mean Squared Error (RMSE) on test data = %g' % rmse)
 '''
 #============================================= Regression =======================================================
 
-dt = DecisionTreeRegressor(labelCol='new_relevance')
-
 lr = LinearRegression(labelCol='new_relevance',
-	maxIter=25,
+	maxIter=20,
 	regParam=0.5)
 
 # Fit the model
