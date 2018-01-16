@@ -133,48 +133,29 @@ def concat(type):
 
 concat_string_arrays = concat(StringType())
 
-#df = df.withColumn('joined_tokens',concat_string_arrays(col('filtered_title_tokens'),col('filtered_sterm_tokens'),col('filtered_attr_tokens')))
-title_ngram = NGram(n=2, inputCol="filtered_title_tokens", outputCol="title_ngrams")
-sterm_ngram = NGram(n=2, inputCol="filtered_sterm_tokens", outputCol="sterm_ngrams")
-attr_ngram = NGram(n=2, inputCol="filtered_attr_tokens", outputCol="attr_ngrams")
+df = df.withColumn('joined_tokens',concat_string_arrays(col('filtered_title_tokens'),col('filtered_sterm_tokens'),col('filtered_attr_tokens')))
+joined_ngram = NGram(n=2, inputCol="joined_tokens", outputCol="joined_ngrams")
 
-df = title_ngram.transform(df)
-df = sterm_ngram.transform(df)
-df = attr_ngram.transform(df)
+df = joined_ngram.transform(df)
 
 '''
 stemmingUdf = udf(stemming, ArrayType(StringType()))
 df = df.withColumn('stemmed_tokens', stemmingUdf('joined_tokens'))
 '''
-title_hashingTF = HashingTF(inputCol="title_ngrams",
-	outputCol="title_rawFeatures",
-	numFeatures=30000)
-sterm_hashingTF = HashingTF(inputCol="sterm_ngrams",
-	outputCol="sterm_rawFeatures",
-	numFeatures=30000)
-attr_hashingTF = HashingTF(inputCol="attr_ngrams",
-	outputCol="attr_rawFeatures",
+joined_hashingTF = HashingTF(inputCol="joined_ngrams",
+	outputCol="joined_rawFeatures",
 	numFeatures=30000)
 
-df = title_hashingTF.transform(df)
-df = sterm_hashingTF.transform(df)
-df = attr_hashingTF.transform(df)
+df = joined_hashingTF.transform(df)
 
-title_idf = IDF(inputCol="title_rawFeatures",
-	outputCol="title_features")
-sterm_idf = IDF(inputCol="sterm_rawFeatures",
-	outputCol="sterm_features")
-attr_idf = IDF(inputCol="attr_rawFeatures",
-	outputCol="attr_features")
+joined_idf = IDF(inputCol="joined_rawFeatures",
+	outputCol="features")
 
-title_idfModel = title_idf.fit(df)
-sterm_idfModel = sterm_idf.fit(df)
-attr_idfModel = attr_idf.fit(df)
+joined_idfModel = joined_idf.fit(df)
 
-df = title_idfModel.transform(df)
-df = sterm_idfModel.transform(df)
-df = attr_idfModel.transform(df)
+df = joined_idfModel.transform(df)
 
+'''
 assembler = VectorAssembler(
 	inputCols=['title_features','sterm_features','attr_features'],
 	outputCol='features')
@@ -192,8 +173,8 @@ assembler_2 = VectorAssembler(
 	outputCol='features_2')
 
 df = assembler_2.transform(df)
-
-df.select('features','features_1','features_2','new_relevance').show()
+'''
+df.select('features','new_relevance').show()
 
 train_df, test_df = df.randomSplit([0.8, 0.2], seed=45)
 train_size = train_df.count()
@@ -236,7 +217,6 @@ print('Root Mean Squared Error (RMSE) on test data = %g' % rmse)
 """
 3 regressors
 """
-
 lr = LinearRegression(labelCol='new_relevance',
 	maxIter=20,
 	regParam=0.5)
