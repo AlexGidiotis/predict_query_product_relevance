@@ -175,15 +175,25 @@ df = title_idfModel.transform(df)
 df = sterm_idfModel.transform(df)
 df = attr_idfModel.transform(df)
 
-
 assembler = VectorAssembler(
 	inputCols=['title_features','sterm_features','attr_features'],
 	outputCol='features')
 
 df = assembler.transform(df)
 
+assembler_1 = VectorAssembler(
+	inputCols=['title_features','sterm_features'],
+	outputCol='features_1')
 
-df.select('features','new_relevance').show()
+df = assembler_1.transform(df)
+
+assembler_2 = VectorAssembler(
+	inputCols=['attr_features','sterm_features'],
+	outputCol='features_2')
+
+df = assembler_2.transform(df)
+
+df.select('features','features_1','features_2','new_relevance').show()
 
 train_df, test_df = df.randomSplit([0.8, 0.2], seed=45)
 train_size = train_df.count()
@@ -223,6 +233,9 @@ print('Root Mean Squared Error (RMSE) on test data = %g' % rmse)
 
 '''
 #============================================= Regression =======================================================
+"""
+3 regressors
+"""
 
 lr = LinearRegression(labelCol='new_relevance',
 	maxIter=20,
