@@ -13,11 +13,18 @@ from keras.models import model_from_json
 from keras.optimizers import Adam
 from keras.constraints import maxnorm
 from keras import regularizers
+from keras import backend as K
+
+from sklearn.model_selection import train_test_split
 
 
 embedding_dim = 200
-glove_path = '/home/alex/Documents/Python/glove.6B/glove.6B.200d.txt'
+glove_path = '/Users/alexgidiotis/atypon/explorer-ai/glove.6B/glove.6B.200d.txt'
 STAMP = 'relevance_predictor'
+
+
+def rmse(y_true, y_pred):
+        return K.sqrt(K.mean(K.square(y_pred - y_true), axis=-1)) 
 
 
 def load_wrd_embeddings(glove_path,
@@ -155,7 +162,7 @@ def build_net(title_len,
 	adam = Adam(lr=lr,
 		decay=1e-5)
 
-	model.compile(loss='mse',
+	model.compile(loss=rmse,
 		optimizer=adam,
 		metrics=[])
 
@@ -164,61 +171,221 @@ def build_net(title_len,
 	return model
 
 
-max_title_len = 15
-max_sterm_len = 10
+def train_model():
+	max_title_len = 15
+	max_sterm_len = 10
+
+	spark = SparkSession.builder.getOrCreate()
+
+	train_df = spark.read.json('data/train_set')
+	train_labs_df = spark.read.json('data/train_set_labels')
+
+	X_titles = [item.int_title_tokens for item in train_df.select('int_title_tokens').collect()]
+	X_sterms = [item.int_sterm_tokens for item in train_df.select('int_sterm_tokens').collect()]
+	y_data = [float(item.relevance) for item in train_labs_df.select('relevance').collect()]
+
+	X_titles_train,X_titles_val,y_train,y_val = train_test_split(X_titles,y_data,
+		test_size=0.2,
+		random_state=10)
+
+	X_sterms_train,X_sterms_val,y_train,y_val = train_test_split(X_sterms,y_data,
+		test_size=0.2,
+		random_state=10)
+
+	spark.stop()
+
+	print('Average train title sequence length: {}'.format(np.mean(list(map(len, X_titles_train)), dtype=int)))
+	print('Average train sterm sequence length: {}'.format(np.mean(list(map(len, X_sterms_train)), dtype=int)))
+
+	X_titles_train = pad_sequences(X_titles_train,
+		maxlen=max_title_len,
+		padding='post',
+		truncating='post',
+		dtype='float32')
+
+	X_sterms_train = pad_sequences(X_sterms_train,
+		maxlen=max_sterm_len,
+		padding='post',
+		truncating='post',
+		dtype='float32')
+
+	X_titles_val = pad_sequences(X_titles_val,
+		maxlen=max_title_len,
+		padding='post',
+		truncating='post',
+		dtype='float32')
+
+	X_sterms_val = pad_sequences(X_sterms_val,
+		maxlen=max_sterm_len,
+		padding='post',
+		truncating='post',
+		dtype='float32')
+
+	print X_titles_train.shape, X_sterms_train.shape
+
+	model = build_net(max_title_len,max_sterm_len,embedding_dim)
+
+	model_json = model.to_json()
+	with open("model/" + STAMP + ".json", "w") as json_file:
+		json_file.write(model_json)
+
+	early_stopping = EarlyStopping(monitor='val_loss',
+		patience=5)
+	bst_model_path = "model/" + STAMP + '.h5'
+	model_checkpoint = ModelCheckpoint(bst_model_path,
+		monitor='val_loss',
+		verbose=1,
+		save_best_only=True,
+		save_weights_only=True)
+
+	hist = model.fit([X_titles_train,X_sterms_train],y_train,
+		validation_data=([X_titles_val,X_sterms_val],y_val),
+		epochs=10,
+		batch_size=64,
+		shuffle=True,
+		callbacks=[early_stopping,model_checkpoint],
+		verbose=1)
+
+	model.load_weights('model/' + STAMP + '.h5')
+	predictions = model.predict([X_titles_val,X_sterms_val])
+
+	print predictions[:20]
+	print y_val[:20]
 
 
-spark = SparkSession.builder.getOrCreate()
+def load_model(STAMP=STAMP):
+	"""
+	Loads the trained model and weights.
 
-train_df = spark.read.json('data/train_set')
-train_labs_df = spark.read.json('data/train_set_labels')
+	Arguments:
+		STAMP: The STAMP of the model.
 
-X_titles_train = [item.int_title_tokens for item in train_df.select('int_title_tokens').collect()]
-X_sterms_train = [item.int_sterm_tokens for item in train_df.select('int_sterm_tokens').collect()]
-y_train = [float(item.relevance) for item in train_labs_df.select('relevance').collect()]
+	Returns:
+		loaded_model:
+	"""
+	# Load the model architecture.
+	json_file = open('model/' + STAMP + '.json', 'r')
+	loaded_model_json = json_file.read()
+	json_file.close()
+	loaded_model = model_from_json(loaded_model_json)
+	# load weights into new model
+	loaded_model.load_weights('model/' + STAMP + '.h5')
+	print("Loaded model from disk")
+	return loaded_model
 
-print('Average train title sequence length: {}'.format(np.mean(list(map(len, X_titles_train)), dtype=int)))
-print('Average train sterm sequence length: {}'.format(np.mean(list(map(len, X_sterms_train)), dtype=int)))
 
-X_titles_train = pad_sequences(X_titles_train,
-	maxlen=max_title_len,
-	padding='post',
-	truncating='post',
-	dtype='float32')
+def evaluate_model():
+	max_title_len = 15
+	max_sterm_len = 10
 
-X_sterms_train = pad_sequences(X_sterms_train,
-	maxlen=max_sterm_len,
-	padding='post',
-	truncating='post',
-	dtype='float32')
 
-print X_titles_train.shape, X_sterms_train.shape
+	spark = SparkSession.builder.getOrCreate()
 
-model = build_net(max_title_len,max_sterm_len,embedding_dim)
+	train_df = spark.read.json('data/train_set')
 
-model_json = model.to_json()
-with open("model/" + STAMP + ".json", "w") as json_file:
-    json_file.write(model_json)
+	X_titles = [item.int_title_tokens for item in train_df.select('int_title_tokens').collect()]
+	X_sterms = [item.int_sterm_tokens for item in train_df.select('int_sterm_tokens').collect()]
 
-early_stopping = EarlyStopping(monitor='val_loss',
-    patience=5)
-bst_model_path = "model/" + STAMP + '.h5'
-model_checkpoint = ModelCheckpoint(bst_model_path,
-    monitor='val_loss',
-    verbose=1,
-    save_best_only=True,
-    save_weights_only=True)
+	train_labs_df = spark.read.json('data/train_set_labels')
+	y_data = [float(item.relevance) for item in train_labs_df.select('relevance').collect()]
 
-hist = model.fit([X_titles_train,X_sterms_train],y_train,
-	validation_split=0.2,
-	epochs=10,
-	batch_size=64,
-	shuffle=True,
-    callbacks=[early_stopping,model_checkpoint],
-    verbose=1)
+	spark.stop()
 
-model.load_weights('model/' + STAMP + '.h5')
-predictions = model.predict([X_titles_train,X_sterms_train])
+	X_titles_train,X_titles_val,y_train,y_val = train_test_split(X_titles,y_data,
+		test_size=0.2,
+		random_state=10)
 
-print predictions[:20]
-print y_train[:20]
+	X_sterms_train,X_sterms_val,y_train,y_val = train_test_split(X_sterms,y_data,
+		test_size=0.2,
+		random_state=10)
+
+	print('Average train title sequence length: {}'.format(np.mean(list(map(len, X_titles_train)), dtype=int)))
+	print('Average train sterm sequence length: {}'.format(np.mean(list(map(len, X_sterms_train)), dtype=int)))
+
+	X_titles_train = pad_sequences(X_titles_train,
+		maxlen=max_title_len,
+		padding='post',
+		truncating='post',
+		dtype='float32')
+
+	X_sterms_train = pad_sequences(X_sterms_train,
+		maxlen=max_sterm_len,
+		padding='post',
+		truncating='post',
+		dtype='float32')
+
+	X_titles_val = pad_sequences(X_titles_val,
+		maxlen=max_title_len,
+		padding='post',
+		truncating='post',
+		dtype='float32')
+
+	X_sterms_val = pad_sequences(X_sterms_val,
+		maxlen=max_sterm_len,
+		padding='post',
+		truncating='post',
+		dtype='float32')
+
+	print X_titles_train.shape, X_sterms_train.shape
+
+	model = load_model('relevance_predictor')
+
+	predictions = model.predict([X_titles_val,X_sterms_val])
+
+
+
+	print 'writing output'
+	with open("model/evaluation_cnn.csv", "w") as csv_file:
+		csv_file.write('label,prediction\n')
+		for id_num,pred in zip(y_val,predictions):
+			csv_file.write('%f ,%f \n' %(id_num,pred))
+
+
+def predict_model():
+	max_title_len = 15
+	max_sterm_len = 10
+
+
+	spark = SparkSession.builder.getOrCreate()
+
+	train_df = spark.read.json('data/new_set')
+
+	X_titles_train = [item.int_title_tokens for item in train_df.select('int_title_tokens').collect()]
+	X_sterms_train = [item.int_sterm_tokens for item in train_df.select('int_sterm_tokens').collect()]
+
+	train_labs_df = spark.read.json('data/new_set_ids')
+	y_train = [float(item.id) for item in train_labs_df.select('id').collect()]
+
+	spark.stop()
+
+	print('Average train title sequence length: {}'.format(np.mean(list(map(len, X_titles_train)), dtype=int)))
+	print('Average train sterm sequence length: {}'.format(np.mean(list(map(len, X_sterms_train)), dtype=int)))
+
+	X_titles_train = pad_sequences(X_titles_train,
+		maxlen=max_title_len,
+		padding='post',
+		truncating='post',
+		dtype='float32')
+
+	X_sterms_train = pad_sequences(X_sterms_train,
+		maxlen=max_sterm_len,
+		padding='post',
+		truncating='post',
+		dtype='float32')
+
+	print X_titles_train.shape, X_sterms_train.shape
+
+	model = load_model('relevance_predictor')
+
+	predictions = model.predict([X_titles_train,X_sterms_train])
+
+	print 'writing output'
+	with open("model/predicted_results_cnn.csv", "w") as csv_file:
+		csv_file.write('id,prediction\n')
+		for id_num,pred in zip(y_train,predictions):
+			csv_file.write('%d ,%f \n' %(id_num,pred))
+
+if __name__ == '__main__':
+	#predict_model()
+	#train_model()
+	evaluate_model()

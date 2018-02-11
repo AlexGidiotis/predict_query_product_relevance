@@ -182,7 +182,7 @@ test_size =  test_df.count()
 
 print train_size,test_size
 
-#========================================== Classification =====================================================
+#========================================== Classification =======================================================
 '''
 lr = LogisticRegression(labelCol='label',
 	maxIter=25,

@@ -44,84 +44,166 @@ def convert_to_int(wrd2id):
 	return udf(convert_to_int_,ArrayType(IntegerType(),False))
 
 
-data_path = '../input/train.csv'
-spark = SparkSession.builder.getOrCreate()
+def process_data(data_path='../input/train.csv',
+	output_name='train'):
+	"""
+	"""
 
-min_word_TF = 10
-min_word_DF = 2
-vocabulary_size = 30000
+	spark = SparkSession.builder.getOrCreate()
 
-start_time = time.time()
+	min_word_TF = 10
+	min_word_DF = 2
+	vocabulary_size = 30000
 
-df = spark.read.csv(data_path,
-	header=True)
+	start_time = time.time()
 
-df = df.withColumn('new_relevance',df['relevance'].cast(FloatType()))
+	df = spark.read.csv(data_path,
+		header=True)
 
-replaceDigitsUdf = udf(replaceDigits, StringType())
-df = df.withColumn('nodigits_title', replaceDigitsUdf('product_title'))
-df = df.withColumn('nodigits_sterm', replaceDigitsUdf('search_term'))
+	df = df.withColumn('new_relevance',df['relevance'].cast(FloatType()))
 
-removePunctuationUdf = udf(removePunctuation, StringType())
-df = df.withColumn('processed_title', removePunctuationUdf('nodigits_title'))
-df = df.withColumn('processed_sterm', removePunctuationUdf('nodigits_sterm'))
+	replaceDigitsUdf = udf(replaceDigits, StringType())
+	df = df.withColumn('nodigits_title', replaceDigitsUdf('product_title'))
+	df = df.withColumn('nodigits_sterm', replaceDigitsUdf('search_term'))
 
-title_tokenizer = Tokenizer(inputCol="processed_title",
-	outputCol="title_tokens")
-sterm_tokenizer = Tokenizer(inputCol="processed_sterm",
-	outputCol="sterm_tokens")
+	removePunctuationUdf = udf(removePunctuation, StringType())
+	df = df.withColumn('processed_title', removePunctuationUdf('nodigits_title'))
+	df = df.withColumn('processed_sterm', removePunctuationUdf('nodigits_sterm'))
 
-df = title_tokenizer.transform(df)
-df = sterm_tokenizer.transform(df)
+	title_tokenizer = Tokenizer(inputCol="processed_title",
+		outputCol="title_tokens")
+	sterm_tokenizer = Tokenizer(inputCol="processed_sterm",
+		outputCol="sterm_tokens")
 
-title_remover = StopWordsRemover(inputCol="title_tokens",
-	outputCol="filtered_title_tokens")
-sterm_remover = StopWordsRemover(inputCol="sterm_tokens",
-	outputCol="filtered_sterm_tokens")
-df = title_remover.transform(df)
-df = sterm_remover.transform(df)
+	df = title_tokenizer.transform(df)
+	df = sterm_tokenizer.transform(df)
 
-def concat(type):
-    def concat_(*args):
-        return list(chain(*args))
-    return udf(concat_, ArrayType(type))
+	title_remover = StopWordsRemover(inputCol="title_tokens",
+		outputCol="filtered_title_tokens")
+	sterm_remover = StopWordsRemover(inputCol="sterm_tokens",
+		outputCol="filtered_sterm_tokens")
+	df = title_remover.transform(df)
+	df = sterm_remover.transform(df)
 
-concat_string_arrays = concat(StringType())
+	def concat(type):
+	    def concat_(*args):
+	        return list(chain(*args))
+	    return udf(concat_, ArrayType(type))
 
-df = df.withColumn('joined_tokens',concat_string_arrays(col('filtered_title_tokens'),col('filtered_sterm_tokens')))
+	concat_string_arrays = concat(StringType())
 
-print('Creating the dictionary...')
-cv = CountVectorizer(inputCol='joined_tokens',
-	minTF=min_word_TF,
-	minDF=min_word_DF,
-	vocabSize=vocabulary_size).fit(df)
+	df = df.withColumn('joined_tokens',concat_string_arrays(col('filtered_title_tokens'),col('filtered_sterm_tokens')))
 
-df.select('filtered_title_tokens','filtered_sterm_tokens','relevance').show()
+	print('Creating the dictionary...')
+	cv = CountVectorizer(inputCol='joined_tokens',
+		minTF=min_word_TF,
+		minDF=min_word_DF,
+		vocabSize=vocabulary_size).fit(df)
 
-vocab = cv.vocabulary
-wrd2id = dict((w,i+1) for i,w in enumerate(vocab))
-print('Found %s unique tokens' % len(wrd2id))
-df = df.withColumn('int_title_tokens', convert_to_int(wrd2id)('filtered_title_tokens'))
-df = df.withColumn('int_sterm_tokens', convert_to_int(wrd2id)('filtered_sterm_tokens'))
+	df.select('filtered_title_tokens','filtered_sterm_tokens','relevance').show()
 
-df.select('filtered_title_tokens','filtered_sterm_tokens','int_title_tokens','int_sterm_tokens','relevance').show()
+	vocab = cv.vocabulary
+	wrd2id = dict((w,i+1) for i,w in enumerate(vocab))
+	print('Found %s unique tokens' % len(wrd2id))
+	df = df.withColumn('int_title_tokens', convert_to_int(wrd2id)('filtered_title_tokens'))
+	df = df.withColumn('int_sterm_tokens', convert_to_int(wrd2id)('filtered_sterm_tokens'))
 
-print 'writting indexes...'
-with open('data/word_index.json', 'w') as fp:
-	json.dump(wrd2id, fp)
+	df.select('filtered_title_tokens','filtered_sterm_tokens','int_title_tokens','int_sterm_tokens','relevance').show()
 
-train_df, test_df = df.randomSplit([0.8, 0.2], seed=45)
-train_size = train_df.count()
-test_size =  test_df.count()
+	print 'writting indexes...'
+	with open('data/word_index.json', 'w') as fp:
+		json.dump(wrd2id, fp)
 
-print train_size,test_size
+	train_df, test_df = df.randomSplit([0.8, 0.2], seed=45)
+	train_size = train_df.count()
+	test_size =  test_df.count()
 
-train_df.select('int_title_tokens','int_sterm_tokens','product_uid').write.json(path="data/train_set", mode='overwrite')
-test_df.select('int_title_tokens','int_sterm_tokens','product_uid').write.json(path="data/test_set", mode='overwrite')
-train_df.select('relevance').write.json(path="data/train_set_labels", mode='overwrite')
-test_df.select('relevance').write.json(path="data/test_set_labels", mode='overwrite')
+	print train_size,test_size
 
-spark.stop()
+	train_df.select('int_title_tokens','int_sterm_tokens','product_uid').write.json(path="data/train_set", mode='overwrite')
+	test_df.select('int_title_tokens','int_sterm_tokens','product_uid').write.json(path="data/test_set", mode='overwrite')
+	train_df.select('relevance').write.json(path="data/train_set_labels", mode='overwrite')
+	test_df.select('relevance').write.json(path="data/test_set_labels", mode='overwrite')
 
-end_time = time.time()
-print "--- Run time: %s seconds ---" % (end_time - start_time)
+	spark.stop()
+
+	end_time = time.time()
+	print "--- Run time: %s seconds ---" % (end_time - start_time)
+
+
+def process_new_data(data_path='../input/test.csv',
+	output_name='test'):
+	"""
+	"""
+
+	spark = SparkSession.builder.getOrCreate()
+
+
+	start_time = time.time()
+
+	df = spark.read.csv(data_path,
+		header=True)
+
+	replaceDigitsUdf = udf(replaceDigits, StringType())
+	df = df.withColumn('nodigits_title', replaceDigitsUdf('product_title'))
+	df = df.withColumn('nodigits_sterm', replaceDigitsUdf('search_term'))
+	
+	removePunctuationUdf = udf(removePunctuation, StringType())
+	df = df.withColumn('processed_title', removePunctuationUdf('nodigits_title'))
+	df = df.withColumn('processed_sterm', removePunctuationUdf('nodigits_sterm'))
+
+	title_tokenizer = Tokenizer(inputCol="processed_title",
+		outputCol="title_tokens")
+	sterm_tokenizer = Tokenizer(inputCol="processed_sterm",
+		outputCol="sterm_tokens")
+
+	df = title_tokenizer.transform(df)
+	df = sterm_tokenizer.transform(df)
+
+	title_remover = StopWordsRemover(inputCol="title_tokens",
+		outputCol="filtered_title_tokens")
+	sterm_remover = StopWordsRemover(inputCol="sterm_tokens",
+		outputCol="filtered_sterm_tokens")
+	df = title_remover.transform(df)
+	df = sterm_remover.transform(df)
+
+	def concat(type):
+	    def concat_(*args):
+	        return list(chain(*args))
+	    return udf(concat_, ArrayType(type))
+
+	concat_string_arrays = concat(StringType())
+
+	df = df.withColumn('joined_tokens',concat_string_arrays(col('filtered_title_tokens'),col('filtered_sterm_tokens')))
+
+	df.select('filtered_title_tokens','filtered_sterm_tokens').show()
+
+	print('Loading the dictionary...')
+	
+	json_file = open('data/word_index.json')
+	json_string = json_file.read()
+	wrd2id = json.loads(json_string)
+
+	print('Found %s unique tokens' % len(wrd2id))
+
+	df = df.withColumn('int_title_tokens', convert_to_int(wrd2id)('filtered_title_tokens'))
+	df = df.withColumn('int_sterm_tokens', convert_to_int(wrd2id)('filtered_sterm_tokens'))
+
+	df.select('filtered_title_tokens','filtered_sterm_tokens','int_title_tokens','int_sterm_tokens').show()
+
+	data_size = df.count()
+
+	print data_size
+
+	df.select('int_title_tokens','int_sterm_tokens','product_uid').write.json(path="data/new_set", mode='overwrite')
+
+	df.select('id').write.json(path="data/new_set_ids", mode='overwrite')
+
+	spark.stop()
+
+	end_time = time.time()
+	print "--- Run time: %s seconds ---" % (end_time - start_time)
+
+
+if __name__ == '__main__':
+    process_new_data(data_path='../input/test.csv')
